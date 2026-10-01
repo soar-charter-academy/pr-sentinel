@@ -16,7 +16,7 @@ keywords = ["code-review", "security", "semgrep", "github-actions", "supabase"]
 # CLI shell-out (see docs/DESIGN.md s5) and is discovered at runtime rather
 # than imported, so the engine degrades cleanly when it is absent.
 dependencies = [
-  "PyYAML>=6.0",
+  "PyYAML>=6.0.3",
 ]
 
 [project.optional-dependencies]
