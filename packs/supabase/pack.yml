@@ -1,0 +1,63 @@
+name: supabase
+version: 1.1.0
+description: >-
+  Postgres-behind-PostgREST failure modes. As of 1.1.0 the three checks that
+  were restatements of Supabase's own published advisors (0008 RLS-enabled-
+  no-policy, 0010 security-definer-view, 0011 mutable-search-path) are gone,
+  replaced by the `supabase-advisors` adapter that runs those lints against
+  the live schema instead of guessing the schema from migration text. What is
+  left is what Supabase cannot tell you: permissive RLS predicates graded by
+  a local fact about who `authenticated` means here, the service-role GRANT
+  rule from this repo's own decisions log, and migration numbering and
+  immutability, which are properties of how this team branches.
+
+# SQL is the obvious half. The `.ts`/`.tsx` globs are here because the
+# service-role-key rules live in client code, not in migrations - the worst
+# Supabase failure is a key placement mistake in a React file, and a pack that
+# only looked at `*.sql` would never see it.
+applies_to:
+  - "*.sql"
+  - "supabase/"
+  - "*.ts"
+  - "*.tsx"
+  - "*.js"
+  - "*.jsx"
+
+requires_engine: ">=0.1.0"
+
+tags: [supabase, postgres, rls, database, migrations]
+
+# RLS is an authorisation question (security), a "who can now see what"
+# question (privacy) and a schema question (data-model). It has nothing to
+# say about interface parity, so it stays out of that prompt.
+briefing_passes: [security, privacy, data-model, lore]
+
+# Both optional, for the same kind of reason and not the same reason.
+# `supabase-advisors` needs a reachable Postgres, so it cannot be a
+# precondition for reviewing a PR on a laptop; when it cannot connect, the
+# advisors do not run and it says so. `squawk` adds general Postgres locking
+# and backwards-compatibility analysis that we never had at all, so its
+# absence removes breadth rather than a guarantee — our own numbering,
+# immutability and grant checks are unaffected by it.
+adapters:
+  - supabase-advisors
+  - squawk
+
+checks:
+  - id: supabase.permissive-policy
+    severity: critical
+
+  - id: supabase.missing-grants
+    severity: high
+    options:
+      migrations_dir: supabase/migrations
+
+  - id: supabase.migration-numbering
+    severity: high
+    options:
+      migrations_dir: supabase/migrations
+
+  - id: supabase.migration-immutability
+    severity: critical
+    options:
+      migrations_dir: supabase/migrations

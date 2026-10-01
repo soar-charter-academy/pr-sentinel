@@ -1,0 +1,47 @@
+name: supply-chain
+version: 1.1.0
+description: >-
+  What Dependabot does not do (DESIGN s12). Dependabot answers "does my tree
+  contain a package with a published CVE?" - necessary, nowhere near
+  sufficient. As of 1.1.0 the pre-CVE window is Socket's job: it has registry
+  data (publish age, maintainer churn) and behavioural analysis of package
+  contents that cannot be derived from a lockfile offline, which is what our
+  own typosquat and install-script heuristics were working around. One check
+  remains ours, because it is about the shape of the diff rather than about
+  any package.
+
+applies_to:
+  - "package.json"
+  - "package-lock.json"
+  - "npm-shrinkwrap.json"
+  - "yarn.lock"
+  - "pnpm-lock.yaml"
+  - "bun.lockb"
+  - ".npmrc"
+  - ".yarnrc.yml"
+
+requires_engine: ">=0.1.0"
+
+tags: [dependencies, npm, supply-chain, dependabot-gap]
+
+# Security only. Adding a dependency is a discrete decision rather than a
+# recurring architectural trap, so this briefing is not what the `lore` pass
+# needs, and it says nothing about data models, PII surfaces or parity.
+briefing_passes: [security]
+
+# Socket is optional: it needs an API key, and a required adapter that is red
+# on every fork and every laptop is worth less than an optional one that is
+# loudly absent. Its absence costs breadth, not a guarantee — the lockfile
+# check below still runs.
+adapters:
+  - socket
+
+checks:
+  # Kept. "A lockfile changed and its manifest did not" is a fact about which
+  # files this pull request touched. Socket analyses packages and has no view
+  # on that, and no package analyser can acquire one.
+  #
+  # `install-scripts`, `new-dependency` and `license-drift` were deleted in
+  # 1.1.0; Socket covers all three, with the registry data ours could not get.
+  - id: supply-chain.lockfile-integrity
+    severity: high

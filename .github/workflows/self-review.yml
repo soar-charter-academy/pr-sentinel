@@ -1,0 +1,81 @@
+# The engine reviews itself.
+#
+# DESIGN s10: "a security tool without static analysis on its own source is not
+# credible." This repo ships rules about `pull_request_target`, over-broad
+# permissions and unpinned actions; if those rules do not run against this
+# repo's own workflows, they are advice rather than practice.
+#
+# This is deliberately NOT `uses: ./.github/workflows/review.yml`. Calling the
+# reusable workflow locally would resolve the engine through
+# `github.workflow_sha`, which on a PR is the base commit - so a PR that broke
+# the engine would be reviewed by the unbroken engine and pass. Running the
+# checkout's own `sentinel` is the only way this catches a regression in
+# itself.
+name: self-review
+
+on:
+  pull_request:
+    # `pull_request`, never `pull_request_target` (DESIGN s10). This workflow
+    # reads PR-authored code, so it must run without the base repo's secrets.
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: self-review-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    name: pr-sentinel on pr-sentinel
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
+
+    steps:
+      # fetch-depth: 0 - the engine diffs against the merge base, which a
+      # shallow clone does not contain.
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install this checkout
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[semgrep]"
+
+      # The engine must be able to explain itself before it reviews anything:
+      # every pack needs a briefing, every enabled check needs an
+      # implementation, every pin has to resolve.
+      - name: Validate packs, pins and local rules
+        run: sentinel validate --repo .
+
+      - name: Review this pull request
+        id: review
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -uo pipefail
+          # --strict: on its own source, a deterministic tier that only
+          # half-ran is a failure. Elsewhere that would be too harsh; here a
+          # silently-skipped semgrep run is exactly the regression this job
+          # exists to catch.
+          sentinel review --repo . --publish --strict
+          code=$?
+          echo "exit-code=${code}" >> "$GITHUB_OUTPUT"
+          case "${code}" in
+            0) echo "::notice::clean" ;;
+            1) echo "::notice::findings reported; not a failure" ;;
+            *) exit 1 ;;
+          esac

@@ -1,0 +1,105 @@
+# Two rules, both about one mistake: the `service_role` key reaching code that
+# a browser can run.
+#
+# The script checks in this pack read SQL. They cannot see this, because the
+# failure is in TypeScript and it is structural - which argument position a
+# key occupies, and what gets chained off the client built from it. That is an
+# AST question, which is exactly where semgrep earns its place.
+rules:
+  - id: supabase.client.service-role-key-in-client-code
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      A Supabase client is being constructed with a service-role key in code
+      that is bundled for the browser. The `service_role` key bypasses row
+      level security entirely: it reads and writes every row of every table,
+      ignoring every policy. Vite inlines `import.meta.env.VITE_*` into the
+      shipped bundle, so shipping this is equivalent to publishing the
+      database. Move the call to an edge function or a server route and have
+      the browser call that, or use the `anon` key and let RLS do its job.
+    patterns:
+      - pattern-either:
+          - pattern: createClient($URL, $KEY, ...)
+          - pattern: createClient<$T>($URL, $KEY, ...)
+          - pattern: $NS.createClient($URL, $KEY, ...)
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: '(?i)^.*(service_?role|SERVICE_?ROLE|admin_?key|secret_?key).*$'
+    paths:
+      include:
+        - "src/**"
+        - "app/**"
+        - "components/**"
+        - "pages/**"
+        - "lib/**"
+      exclude:
+        # Server-side surfaces where a service-role client is the correct
+        # thing to build. Flagging these is how the rule gets turned off.
+        - "supabase/functions/**"
+        - "**/api/**"
+        - "**/server/**"
+        - "**/*.server.ts"
+        - "**/*.server.js"
+        - "netlify/functions/**"
+        - "scripts/**"
+        - "**/*.test.*"
+        - "**/*.spec.*"
+    metadata:
+      pack: supabase
+      sentinel-severity: critical
+      title: Supabase client built with a service-role key in client-reachable code
+      rationale: >-
+        The `anon` key and the `service_role` key are both JWTs and look
+        identical at a glance, so this mistake survives code review by people
+        who know better. The only durable signal is the *name* of the binding
+        the key comes from, which is what this matches; server directories
+        where a service-role client is legitimate are excluded by path so the
+        rule does not fire on correct code.
+      verify: >-
+        Check whether the key is referenced through `import.meta.env.VITE_*`
+        or `process.env.NEXT_PUBLIC_*`. Either prefix means the bundler
+        inlines it into client JavaScript and the key must be treated as
+        already published - regenerate the project JWT secret, do not merely
+        move the line.
+
+  - id: supabase.client.service-role-query
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      A query is being issued through a client that was constructed with a
+      service-role key. Every `.from()` and `.rpc()` on this client runs with
+      RLS bypassed, so any filtering it appears to do is application-level
+      only - a missing `.eq('user_id', ...)` here returns every user's rows
+      rather than none. Confirm this code path is server-only and that every
+      row filter it relies on is written explicitly.
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $CLIENT = createClient($URL, $KEY, ...)
+              ...
+              $CLIENT.from($TABLE)
+          - pattern: |
+              $CLIENT = createClient($URL, $KEY, ...)
+              ...
+              $CLIENT.rpc($FN, ...)
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: '(?i)^.*(service_?role|SERVICE_?ROLE).*$'
+    metadata:
+      pack: supabase
+      sentinel-severity: high
+      title: Query issued through a service-role client
+      rationale: >-
+        High rather than critical, because on a server this is legitimate and
+        common - the finding is about the *reasoning* the query depends on,
+        not about placement. Under the `anon` key a forgotten predicate
+        returns nothing and someone notices in five minutes; under
+        `service_role` a forgotten predicate returns everything and nobody
+        notices at all. The sequential pattern binds the query to the client
+        that created it, which is the part a grep for `service_role` cannot
+        do.
+      verify: >-
+        Read the filters on this query and ask what it returns if the caller
+        supplies an unexpected id, an empty string, or nothing. Under
+        `service_role` that answer is the whole table unless the code stops
+        it.

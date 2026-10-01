@@ -1,0 +1,43 @@
+name: privacy-edu
+version: 1.0.0
+description: >-
+  A NONBINDING, legal-adjacent read for a US K-8 setting (DESIGN s11). It
+  flags surfaces - "this PR exposes a student-PII column to a role that could
+  not read it before", "this routes minors' survey responses to a third-party
+  service" - and names the framework plausibly engaged. It never rules on
+  compliance, in either direction. Every finding it emits says so.
+
+applies_to:
+  - "*.sql"
+  - "*.ts"
+  - "*.tsx"
+  - "*.js"
+  - "*.jsx"
+  - "*.py"
+  - "supabase/"
+
+requires_engine: ">=0.1.0"
+
+tags: [privacy, ferpa, coppa, student-data, nonbinding, education]
+
+# The privacy pass is the point. Data-model matters because widening a
+# column's audience is a schema change first and a privacy event second.
+# Everything else - security, lore, parity - gets nothing from this briefing
+# and should not pay for its tokens on every review.
+briefing_passes: [privacy, data-model]
+
+checks:
+  - id: privacy-edu.widens-pii-read
+    severity: high
+
+  - id: privacy-edu.pii-new-sink
+    severity: high
+
+  - id: privacy-edu.analytics-student-identifier
+    severity: high
+
+  - id: privacy-edu.pii-in-url
+    severity: high
+
+  - id: privacy-edu.test-data-bleed
+    severity: medium

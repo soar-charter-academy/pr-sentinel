@@ -1,0 +1,263 @@
+# The reusable workflow consuming repos call.
+#
+# A consuming repo adds ~10 lines (see templates/review-caller.yml) and gets an
+# independent review on every pull request. Everything security-relevant about
+# how this runs is decided here, once, rather than in each caller.
+#
+# Trigger contract: this is `workflow_call` only, and callers MUST trigger on
+# `pull_request`. Never `pull_request_target`. `pull_request_target` runs in the
+# context of the *base* repo with full access to its secrets while checking out
+# code the PR author controls, which is the standard way code-review bots get
+# turned into secret-exfiltration bots (DESIGN s10). The guard step below
+# refuses to run under it rather than trusting every caller to remember.
+name: pr-sentinel review
+
+on:
+  workflow_call:
+    inputs:
+      base-ref:
+        description: >-
+          Base ref to diff against. Empty means "take it from the pull_request
+          event", which is what you want.
+        type: string
+        required: false
+        default: ""
+      mode:
+        description: >-
+          Override `mode:` from the repo's .pr-sentinel.yml for this run
+          (advisory | gated | blocking). Intended for trialling a stricter mode
+          before committing to it. Empty means "use the repo's own config".
+        type: string
+        required: false
+        default: ""
+      packs-dir:
+        description: >-
+          Override the curated pack directory. Only useful when testing a pack
+          change; leave empty to use the packs shipped with this engine
+          revision.
+        type: string
+        required: false
+        default: ""
+      run-agent:
+        description: >-
+          Run the Tier 2 agent passes. Requires ANTHROPIC_API_KEY; if the secret
+          is absent the engine skips the agent tier and says so, rather than
+          failing.
+        type: boolean
+        required: false
+        default: true
+      python-version:
+        description: Python used to run the engine.
+        type: string
+        required: false
+        default: "3.12"
+      config-path:
+        description: Path to .pr-sentinel.yml, if it is not at the repo root.
+        type: string
+        required: false
+        default: ""
+    secrets:
+      ANTHROPIC_API_KEY:
+        description: >-
+          Only credential this workflow ever wants. It reviews code: it has no
+          business holding a service-role key, a certificate or a service
+          account (DESIGN s10). Optional - without it the deterministic tiers
+          still run.
+        required: false
+    outputs:
+      outcome:
+        description: ok | findings | blocked | error
+        value: ${{ jobs.review.outputs.outcome }}
+
+# One review per PR. A superseded run's verdict is noise at best and a
+# confusing stale check-run at worst.
+concurrency:
+  group: pr-sentinel-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Review
+    runs-on: ubuntu-latest
+    # Exactly what the engine needs and not one scope more (DESIGN s10):
+    #   contents: read        clone the PR head to diff and scan it
+    #   pull-requests: write  write the single review comment
+    #   checks: write         publish `pr-sentinel` and `pr-sentinel/deterministic`
+    # Never `contents: write`. The engine never pushes, never merges, never
+    # edits a PR (DESIGN s2), so a token that could do any of those is a
+    # liability with no corresponding capability.
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
+    outputs:
+      outcome: ${{ steps.review.outputs.outcome }}
+
+    steps:
+      # Defence in depth against a caller wiring this to the wrong trigger.
+      # The permissions block above already denies most of the damage, but a
+      # `pull_request_target` caller would hand this job the base repo's
+      # secrets while it reads attacker-authored code, so refuse outright.
+      - name: Refuse to run on pull_request_target
+        if: github.event_name == 'pull_request_target'
+        run: |
+          echo '::error::pr-sentinel refuses to run under pull_request_target. Use pull_request. See docs/DESIGN.md s10.'
+          exit 1
+
+      # fetch-depth: 0 is not tidiness. The engine diffs the head against the
+      # merge base, and a shallow clone does not contain the merge base, so
+      # every review would either crash or silently review the wrong range.
+      # The engine raises a DiffError naming this setting when it happens.
+      - name: Check out the pull request
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The engine is checked out at exactly the commit of *this* workflow
+      # file, so a caller pinned to `@v1` gets the engine that shipped with
+      # `v1`. Resolving it any other way would let the rule set drift out from
+      # under a pin, which is the whole reason DESIGN s4 forbids `@main`.
+      - name: Resolve this engine revision
+        id: engine
+        env:
+          # Via env, never interpolated straight into the shell - expression
+          # injection is a rule in our own `github-actions` pack.
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          repo="${WORKFLOW_REF%%/.github/*}"
+          echo "repo=${repo}" >> "$GITHUB_OUTPUT"
+          echo "sha=${WORKFLOW_SHA}" >> "$GITHUB_OUTPUT"
+          echo "pr-sentinel engine: ${repo}@${WORKFLOW_SHA}"
+
+      - name: Check out the engine
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ steps.engine.outputs.repo }}
+          ref: ${{ steps.engine.outputs.sha }}
+          path: .pr-sentinel-engine
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      # Node is here for Tier 0 only (npm test / lint / build in the consuming
+      # repo). It is a no-op for repos without a package.json.
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+
+      - name: Install the engine and semgrep
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          # Editable so the curated packs resolve from the checkout rather than
+          # from a wheel that may not carry them.
+          python -m pip install -e "${GITHUB_WORKSPACE}/.pr-sentinel-engine[semgrep]"
+          sentinel --version
+          semgrep --version
+
+      # `mode` is a preset over the per-severity authority map (DESIGN s6), not
+      # a separate code path, so overriding it here changes what blocks and
+      # nothing else. Implemented by writing a derived config rather than by
+      # editing the repo's own file: the checkout stays exactly as the PR left
+      # it, which matters when the thing being reviewed is the config.
+      - name: Apply the mode override
+        id: config
+        env:
+          MODE: ${{ inputs.mode }}
+          CONFIG_PATH: ${{ inputs.config-path }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MODE}" ]; then
+            echo "path=${CONFIG_PATH}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import os, pathlib, yaml
+          explicit = os.environ.get("CONFIG_PATH") or ""
+          candidates = [explicit] if explicit else [".pr-sentinel.yml", ".pr-sentinel.yaml"]
+          raw = {}
+          for name in candidates:
+              p = pathlib.Path(name)
+              if p.is_file():
+                  raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+                  break
+          raw.setdefault("version", 1)
+          raw["mode"] = os.environ["MODE"]
+          out = pathlib.Path(".pr-sentinel.override.yml")
+          out.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+          print(f"path={out}")
+          PY
+
+      # Surfaces a bad config, a pin the engine cannot satisfy or a rejected
+      # local rule in the log before any model token is spent. Advisory here on
+      # purpose: `validate` also reports soft problems, and the review itself is
+      # the authority on what blocks.
+      - name: Validate configuration
+        continue-on-error: true
+        env:
+          PR_SENTINEL_PACKS_DIR: ${{ inputs.packs-dir }}
+          CONFIG: ${{ steps.config.outputs.path }}
+        run: |
+          set -uo pipefail
+          args=(validate --repo .)
+          [ -n "${CONFIG}" ] && args+=(--config "${CONFIG}")
+          sentinel "${args[@]}"
+
+      - name: Review
+        id: review
+        env:
+          # The only token the engine gets, scoped by the permissions block
+          # above. It is read by the publisher, never placed in a prompt.
+          GITHUB_TOKEN: ${{ github.token }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PR_SENTINEL_PACKS_DIR: ${{ inputs.packs-dir }}
+          BASE_REF: ${{ inputs.base-ref }}
+          CONFIG: ${{ steps.config.outputs.path }}
+          RUN_AGENT: ${{ inputs.run-agent }}
+        run: |
+          set -uo pipefail
+          args=(review --repo . --publish)
+          [ -n "${BASE_REF}" ] && args+=(--base "${BASE_REF}")
+          [ -n "${CONFIG}" ] && args+=(--config "${CONFIG}")
+          [ "${RUN_AGENT}" = "true" ] || args+=(--no-agent)
+
+          sentinel "${args[@]}"
+          code=$?
+
+          # 0 ok / 1 findings / 2 blocked / 3 engine error. Findings are the
+          # normal output of a reviewer and must not fail the job - a tool that
+          # turns the build red every time it has an opinion gets switched off.
+          case "${code}" in
+            0) outcome=ok ;;
+            1) outcome=findings ;;
+            2) outcome=blocked ;;
+            *) outcome=error ;;
+          esac
+          echo "outcome=${outcome}" >> "$GITHUB_OUTPUT"
+          echo "exit-code=${code}" >> "$GITHUB_OUTPUT"
+
+          case "${outcome}" in
+            ok)       echo "::notice::pr-sentinel: nothing to report." ;;
+            findings) echo "::notice::pr-sentinel: findings reported on the PR; not a failure." ;;
+            blocked)  echo "::error::pr-sentinel: a blocking finding is unresolved." ;;
+            error)    echo "::warning::pr-sentinel could not complete (exit ${code}). \
+                           The check-runs it did publish stand; this job will not fail the PR." ;;
+          esac
+          exit 0
+
+      # Only a real block fails the job. An engine error deliberately does not:
+      # a repo that asked for advice must not be held hostage by a broken
+      # reviewer, and the deterministic check-run is the thing branch
+      # protection should be keyed to anyway (see src/pr_sentinel/policy.py).
+      - name: Fail on a blocking finding
+        if: steps.review.outputs.outcome == 'blocked'
+        run: |
+          echo "::error::pr-sentinel blocked this pull request. See the review comment."
+          exit 1

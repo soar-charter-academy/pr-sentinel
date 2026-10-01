@@ -1,0 +1,154 @@
+# -----------------------------------------------------------------------------
+# GOES IN:  <your-repo>/.pr-sentinel.yml   (repo root, note the leading dot)
+# -----------------------------------------------------------------------------
+# The whole per-repo configuration. Copy it, delete the packs that do not apply
+# to your stack, and commit it. With no file at all the engine runs `core` in
+# advisory mode, which is deliberately timid: a tool that arrives uninvited
+# with opinions about your database schema does not get adopted.
+# -----------------------------------------------------------------------------
+
+version: 1
+
+# -- packs --------------------------------------------------------------------
+# A pack is BOTH halves: semgrep rules *and* a briefing that teaches the agent
+# tier what failure looks like in that technology. Enabling `supabase` gives
+# you the `using (true)` matcher and the explanation of why RLS bypass is not
+# grant bypass. That pairing is the central idea; packs are the unit of
+# knowledge, not merely of pattern-matching.
+#
+# EACH PACK IS PINNED INDEPENDENTLY of the engine tag and of every other pack.
+# `core@^1.1` means "any 1.x from 1.1 up, never 2.0". A pack the engine cannot
+# satisfy is a hard error, not a warning: quietly running a different rule set
+# than you asked for is exactly the failure that pinning exists to prevent.
+#
+# Drop the `@` half to mean "whatever ships". Convenient while trialling;
+# a bad idea once anything depends on the verdict.
+packs:
+  - core@^1.1          # enables `gitleaks` for secret scanning, plus the briefing
+  - supply-chain@^1.1  # enables `socket` for the pre-CVE window Dependabot cannot
+                       # see, plus our lockfile/manifest-disagreement check
+  - supabase@^1.1      # permissive RLS, missing grants, migration numbering and
+                       # immutability, service-role keys in client code; enables
+                       # `supabase-advisors` and `squawk`
+  - react-vite@^1.0    # values the bundler inlines into shipped JS, \uXXXX in JSX text
+  - github-actions@^1.1  # enables `zizmor` and `actionlint`, plus the briefing
+  - privacy-edu@^1.0   # NONBINDING: flags student-PII surfaces, names the framework,
+                       # never rules on compliance in either direction
+
+# Several packs enable EXTERNAL TOOLS rather than implementing the rules
+# themselves (DESIGN-V2 s3). `gitleaks` and `zizmor` are required: while they
+# are not installed, reviews withhold `pr-sentinel/deterministic` rather than
+# report a clean run. Run `sentinel validate` to see what is missing and what
+# its absence costs.
+
+# -- repo knowledge -----------------------------------------------------------
+# This repo's expensive, recurring, already-made mistakes. It stays HERE and
+# never in the engine, which is what makes a public engine safe to point at a
+# private codebase. Same engine + different lore = a different reviewer.
+# See templates/lore.md for what a good entry looks like.
+lore: .pr-sentinel/lore.md
+
+# Rules anyone on this team may add, no engine PR required. Validated on every
+# run: declarative data only, `id` + `message` + `metadata.rationale`
+# mandatory, and severity capped at `high` so a local rule can never block a
+# merge on its own. See templates/local-rule-example.yml.
+local_rules: .pr-sentinel/rules/
+
+# -- what blocks --------------------------------------------------------------
+# advisory  comments, always-neutral status, nothing blocks
+# gated     deterministic criticals fail a check; agent findings stay advisory
+# blocking  anything at or above `high` blocks until resolved or dismissed
+#
+# `gated` is the recommended default and the reason the architecture is shaped
+# the way it is: guarantees block, judgment advises. Start on `advisory` for a
+# week or two, read what it says, then move here.
+#
+# Mode is a preset over the `authority:` map below, not a separate code path.
+mode: gated
+
+# Per-severity override of the preset. Uncomment only what you actually want to
+# differ - an authority map that has drifted from its mode is hard to reason
+# about later.
+#
+# blocking      fails the `pr-sentinel` check-run
+# comment       appears in the review comment
+# summary-only  counted in the summary line, not itemised
+# ignore        dropped entirely
+#
+# authority:
+#   critical: blocking
+#   high:     comment
+#   medium:   comment
+#   low:      summary-only
+#   info:     summary-only
+
+# -- the agent tier -----------------------------------------------------------
+# Judgment, not guarantees. An agent finding is never allowed to block, no
+# matter what `authority:` says, because PR text is one of its inputs and PR
+# text is attacker-controlled.
+agent:
+  enabled: true
+
+  # Each pass is narrowly briefed and looks for one class of thing. Cutting
+  # passes you do not need is the cheapest way to cut cost and noise.
+  #   security    authz/authn, injection, secret handling, RLS logic
+  #   privacy     who can now see what, and where data newly flows
+  #   data-model  schema changes, migration safety, compatibility
+  #   lore        does this repeat a documented past mistake?
+  #   parity      does this update every interface it needs to?
+  passes: [security, privacy, data-model, lore, parity]
+
+  # A cap, not a target. Eight substantiated findings is already more than a
+  # human will act on in one sitting; a comment with thirty gets collapsed and
+  # never reopened.
+  max_findings: 8
+
+  # Drafts are work in progress by definition. Reviewing them burns tokens on
+  # code the author already knows is unfinished.
+  skip_draft_prs: true
+
+  # Triage cheap, escalate expensive. A fast model decides which files warrant
+  # close reading; a strong model does the reading. Reviewing a lockfile with a
+  # frontier model is how this gets abandoned on cost.
+  triage_model: claude-haiku-4-5-20251001
+  review_model: claude-sonnet-5-5
+
+  max_files_reviewed: 25
+  max_file_bytes: 60000
+
+  # Every candidate finding is re-checked against the actual code before it may
+  # enter the comment; unverified findings are dropped, not softened. Turn this
+  # off only to see what it was filtering out, and turn it straight back on.
+  # It is the difference between a reviewer you read and one you mute.
+  verification: true
+
+# -- Tier 0: your project's own checks ----------------------------------------
+# Runs first and fails fast. If the build is broken, spending model tokens on
+# nuanced review is waste. Leave `commands` empty to auto-detect from the
+# scripts in package.json.
+tier0:
+  enabled: true
+  commands: []        # e.g. ["npm ci --ignore-scripts", "npm test", "npm run lint"]
+  fail_fast: true
+  timeout_seconds: 900
+  audit_level: high   # npm audit threshold
+
+# -- exclusions ---------------------------------------------------------------
+# Paths here are not reviewed at all. Keep the list short: every entry is a
+# place findings cannot come from, and the reason will be forgotten long before
+# the entry is.
+ignore:
+  paths:
+    - dist/
+    - build/
+    - node_modules/
+    - "*.min.js"
+    - "*.map"
+    # package-lock.json is deliberately NOT ignored. Lockfile-only changes are
+    # both a common merge artifact and what dependency substitution looks like,
+    # and the supply-chain pack is the only thing that will notice.
+
+  # Silencing a specific rule id. Prefer fixing the rule, or adding a
+  # `nosemgrep` comment at the one line that needs it - a repo-wide suppression
+  # outlives the situation that justified it.
+  rules: []

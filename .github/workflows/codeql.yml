@@ -1,0 +1,55 @@
+# CodeQL on the engine's own source.
+#
+# DESIGN s12: CodeQL and secret scanning are free on public repos and paid on
+# private ones. This repo is public precisely so that both are available - and
+# s10 says a security tool without static analysis on its own source is not
+# credible. So it is on from day one, not "once we have time".
+#
+# This is complementary to self-review.yml, not a duplicate of it. CodeQL does
+# whole-program dataflow across the repository; pr-sentinel's Tier 1 does
+# pattern matching on the diff. They fail differently, which is the point.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly. A rule added to CodeQL's own query pack after a PR merged is
+    # only useful if something re-scans the default branch.
+    - cron: "27 5 * * 1"
+
+concurrency:
+  group: codeql-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze Python
+    runs-on: ubuntu-latest
+    # `security-events: write` is the one scope that only this job needs; it
+    # is granted here rather than at workflow level so that nothing else
+    # inherits the ability to write to the code-scanning API.
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          languages: python
+          # security-extended adds the lower-precision queries. On a codebase
+          # this small the extra triage cost is trivial and the extra coverage
+          # is the reason to run CodeQL at all.
+          queries: security-extended
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          category: "/language:python"

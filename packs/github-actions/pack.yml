@@ -1,0 +1,48 @@
+name: github-actions
+version: 1.1.0
+description: >-
+  CI as an attack surface. As of 1.1.0 this pack implements none of its own
+  rules: `zizmor` ships 38 Actions audit rules against our 5, is the de facto
+  standard, catches impostor commits and cache poisoning we never wrote, and
+  is maintained against new Actions attack classes as they are published.
+  `actionlint` is added alongside it for workflow *correctness* — expression
+  typing, job graph validity, runner labels, shellcheck over embedded scripts
+  — which complements zizmor's security focus rather than overlapping it.
+
+# `*action.yml` is included deliberately. Composite actions carry exactly the
+# same `uses:` and `run:` hazards as workflows and are reviewed far less
+# often, so they are in scope for everything this pack enables.
+applies_to:
+  - "*workflows/*.yml"
+  - "*workflows/*.yaml"
+  - "*action.yml"
+  - "*action.yaml"
+
+requires_engine: ">=0.1.0"
+
+tags: [ci, github-actions, supply-chain, secrets]
+
+# Workflow risk is a security concern; it is also where a repo's repeated
+# CI mistakes live. Nothing here informs privacy, data-model or parity.
+#
+# As with `core`, the briefing is why this pack is still a pack. zizmor
+# audits the workflow; it does not teach Tier 2 that `pull_request_target`
+# plus a head-sha checkout is how these systems get compromised, or that this
+# repo has made that mistake before.
+briefing_passes: [security, lore]
+
+# zizmor is REQUIRED and actionlint is not. There is no second Actions
+# security auditor, so a missing zizmor means workflow hazards were not
+# looked for at all. A missing actionlint means workflow correctness bugs
+# surface on the next workflow run instead of in review — a slower feedback
+# loop, not an absent guarantee.
+adapters:
+  - zizmor
+  - actionlint
+
+# No script checks and no semgrep rules. `pull-request-target`,
+# `unpinned-actions`, `broad-permissions`, `secrets-scope` and
+# `script-injection` were deleted in 1.1.0 (DESIGN-V2 s3); every one of them
+# is in zizmor's rule set, written against a structural model of workflows
+# that is maintained full time.
+checks: []

@@ -1,0 +1,96 @@
+# -----------------------------------------------------------------------------
+# GOES IN:  <your-repo>/.pr-sentinel/rules/<something-descriptive>.yml
+#           (directory set by `local_rules:` in .pr-sentinel.yml)
+# -----------------------------------------------------------------------------
+# Rules anyone on the team may add, with no gate beyond this repo's own PR
+# review. They run alongside the curated packs on every review.
+#
+# Because there is no engine-side review, the engine supplies the guardrails
+# the review process doesn't:
+#
+#   * DECLARATIVE ONLY. A rule is data, never executable code. `pattern-where`,
+#     `pattern-where-python`, `fix` and `fix-regex` are refused outright - the
+#     first two would run arbitrary Python inside CI, and the last two describe
+#     code edits, which this engine never makes.
+#
+#   * `id`, `message` and `metadata.rationale` ARE MANDATORY. A rule missing
+#     any of them is dropped and the drop is reported, never silently skipped.
+#     The rationale is not bureaucracy: a finding without a stated reason gets
+#     suppressed, and a rule that is always suppressed trains everyone to
+#     ignore the tool.
+#
+#   * SEVERITY IS CAPPED AT `high`. Ask for `critical` and the engine lowers it
+#     to `high` and tells you it did. `critical` is curated-only, so a local
+#     rule can never block a merge by itself. If a rule genuinely deserves to
+#     stop a merge everywhere that uses the dependency, that is the signal to
+#     promote it into a curated pack upstream - which is how the catalogue is
+#     meant to grow.
+#
+#   * IDS ARE NAMESPACED. Anything not already starting `local.` gets the
+#     prefix added, so a local rule cannot impersonate a curated one in a
+#     comment or an ignore list.
+#
+# The format is semgrep's, unchanged: https://semgrep.dev/docs/writing-rules/
+# Test a rule before committing it with `sentinel validate --repo .`, which
+# reports exactly what would be accepted, renamed or dropped.
+# -----------------------------------------------------------------------------
+
+rules:
+  # A worked example of the shape all three mandatory fields take. Replace the
+  # pattern with something true of your repo - if the rule would be equally
+  # true of any repo using this dependency, it belongs in a curated pack, not
+  # here.
+  - id: local.aeries-client-direct-fetch
+    # ^ Required. Lowercase alphanumeric plus . _ - and nothing else. The
+    #   `local.` prefix is added for you if you leave it off. Name the thing
+    #   that is wrong, not the file it tends to appear in.
+
+    languages: [typescript, javascript]
+
+    # What the reviewer will actually say. Write it for the person who has to
+    # act on it: what is wrong, and what to do instead. "Avoid direct fetch" is
+    # a scolding; the text below is a patch.
+    message: >-
+      This calls the Aeries endpoint directly from application code. Route it
+      through `src/lib/aeries/client.ts` instead: that wrapper adds the
+      certificate, the retry budget and the PII redaction on the log path, and
+      a direct call silently gets none of the three.
+
+    # WARNING | ERROR | INFO. Semgrep's own field; the engine maps it, but
+    # `metadata.sentinel-severity` below is what actually decides authority.
+    severity: WARNING
+
+    pattern-either:
+      - pattern: fetch("$URL", ...)
+      - pattern: axios.get("$URL", ...)
+    metavariable-regex:
+      metavariable: $URL
+      regex: .*aeries.*
+
+    # Skip the wrapper itself, which is allowed to do exactly this. A rule that
+    # flags its own sanctioned implementation is a rule everyone learns to
+    # ignore within a week.
+    paths:
+      exclude:
+        - src/lib/aeries/client.ts
+        - "**/*.test.ts"
+
+    metadata:
+      # REQUIRED. Why this rule exists, in terms of what went wrong. The
+      # engine drops the rule without it. `why:` is accepted as an alias.
+      rationale: >-
+        A direct call bypasses PII redaction on the log path, so student
+        identifiers end up in plaintext logs. Happened twice in 2026; both
+        times the code looked perfectly reasonable in review because nothing
+        about `fetch` suggests a redaction step is missing.
+
+      # Optional. `critical` here would be lowered to `high` with a note.
+      # Default when omitted is `medium`.
+      sentinel-severity: high
+
+      # Optional, and worth the two lines. A reviewer who can open the
+      # incident writeup argues with the finding far less often.
+      references:
+        - docs/DECISIONS-LOG.md#aeries-logging
+      confidence: high
+      tags: [pii, logging, aeries]

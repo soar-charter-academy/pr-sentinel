@@ -1,0 +1,42 @@
+# -----------------------------------------------------------------------------
+# GOES IN:  <your-repo>/.github/workflows/ci.yml
+# -----------------------------------------------------------------------------
+# Step 1 of the rollout, and completely standalone: no pr-sentinel, no engine,
+# no API key, nothing to adopt. Copy it in and it works.
+#
+# It is here because it is worth doing whether or not the rest of pr-sentinel
+# is ever built. A repo with a test suite and no CI on pull requests has tests
+# that nobody runs - soar-app has 67 of them sitting unrun today. Fifteen lines
+# of YAML converts that into a signal on every PR, and no amount of clever
+# review tooling substitutes for it.
+# -----------------------------------------------------------------------------
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to a full commit SHA, not `@v4`. A tag is a pointer that its
+      # owner can move; a compromised action executes here with every secret
+      # this job can see.
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+          cache: npm
+      # --ignore-scripts: postinstall is arbitrary code execution at dependency
+      # resolution time, and CI is where the secrets are. Drop the flag only if
+      # the build genuinely does not work without it.
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - run: npm run lint

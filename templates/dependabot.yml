@@ -1,0 +1,37 @@
+# -----------------------------------------------------------------------------
+# GOES IN:  <your-repo>/.github/dependabot.yml
+# -----------------------------------------------------------------------------
+# Step 2 of the rollout. No new repo, no engine, no tokens - and it closes the
+# largest exposure most repos currently have. Alerts and security updates are
+# free on private repos as well as public ones, so there is no plan-tier reason
+# not to.
+#
+# TWO ecosystems. Change `npm` below if this is not a Node repo (`pip`,
+# `bundler`, `gomod`, `maven`, ...), but do NOT delete the second one.
+# -----------------------------------------------------------------------------
+version: 2
+updates:
+  # What Dependabot is genuinely good at: does the tree contain a package with
+  # a published CVE? Necessary, and nowhere near sufficient - a CVE is a
+  # lagging indicator and a malicious package is dangerous the day it
+  # publishes. That gap is what pr-sentinel's `supply-chain` pack covers.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies]
+
+  # THE FORGOTTEN ONE. Almost every repo adds the first block and stops.
+  #
+  # Pair this with pinning every `uses:` to a full commit SHA with the version
+  # in a trailing comment. The two are complementary, not alternatives: the pin
+  # stops a moved tag from executing attacker code in CI, and this updater is
+  # what keeps the pin from being a version frozen in 2024. Dependabot rewrites
+  # both the SHA and the comment.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies, ci]

@@ -1,0 +1,81 @@
+# Two JSX-shaped rules. Both are here rather than as script checks because
+# both turn on *position* - where in the syntax the thing sits - which is the
+# one question a line-oriented check cannot answer.
+rules:
+  - id: react-vite.jsx.unicode-escape-in-text
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      A `\uXXXX` escape appears in a JSX text position. JSX text is not a
+      JavaScript string literal, so this is not an escape sequence - React
+      renders the six characters `\`, `u`, and the four hex digits, literally,
+      on the page. Write the character itself (`—`), use an HTML entity
+      (`&mdash;`), or move it into an expression container (`{'\u2014'}`),
+      which *is* a string literal and does escape.
+    patterns:
+      - pattern-either:
+          - pattern-regex: '>[^<>{}"''`\n]*\\u[0-9a-fA-F]{4}[^<>{}"''`\n]*[<{]'
+          - pattern-regex: '>[^<>{}"''`\n]*\\x[0-9a-fA-F]{2}[^<>{}"''`\n]*[<{]'
+    paths:
+      include:
+        - "*.tsx"
+        - "*.jsx"
+        - "**/*.tsx"
+        - "**/*.jsx"
+    metadata:
+      pack: react-vite
+      sentinel-severity: medium
+      title: "`\\uXXXX` escape in a JSX text position renders literally"
+      rationale: >-
+        Documented lore (DESIGN s8): this repo has shipped it before. It is
+        insidious because the code looks correct to anyone who has written
+        JavaScript, TypeScript accepts it, the build succeeds, tests that
+        assert on rendered text usually copy the same escape, and the only
+        place it is visible is the running page. Precision comes from the
+        character class: the escape must sit between a `>` and the next `<`
+        or `{` with no quote character in between, which is what distinguishes
+        a JSX child from a string literal that happens to be nearby.
+      verify: >-
+        Render the component and read the actual text. If the six literal
+        characters appear, replace them; if the escape was inside an
+        expression container after all, this is a false positive and worth
+        saying so.
+
+  - id: react-vite.jsx.dangerously-set-inner-html-dynamic
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      `dangerouslySetInnerHTML` is being given a value React cannot see the
+      provenance of. Everything React normally does to make rendering safe is
+      switched off for this subtree: the string is parsed as HTML, so an
+      `onerror=` attribute or a `javascript:` href inside it executes with the
+      full authority of the logged-in user's session. Sanitise with a real
+      HTML sanitiser at the point of render, or render the value as text.
+    patterns:
+      - pattern-either:
+          - pattern: '<$EL dangerouslySetInnerHTML={{__html: $HTML}} />'
+          - pattern: '{"dangerouslySetInnerHTML": {"__html": $HTML}}'
+      - pattern-not: '<$EL dangerouslySetInnerHTML={{__html: "..."}} />'
+      - pattern-not: '{"dangerouslySetInnerHTML": {"__html": "..."}}'
+      # A correctly sanitised value is not a finding. Excluding the two
+      # well-known sanitisers is what keeps this rule from being suppressed
+      # wholesale on a codebase that already does the right thing.
+      - pattern-not: '<$EL dangerouslySetInnerHTML={{__html: DOMPurify.sanitize(...)}} />'
+      - pattern-not: '<$EL dangerouslySetInnerHTML={{__html: sanitizeHtml(...)}} />'
+    metadata:
+      pack: react-vite
+      sentinel-severity: high
+      title: dangerouslySetInnerHTML with a non-literal value
+      rationale: >-
+        The literal-string case is excluded because a constant markup blob is
+        a maintainability question, not a security one, and flagging it
+        teaches people that this rule cries wolf. What remains - a variable, a
+        prop, a template literal, an API response, a Markdown render - is the
+        case where an attacker somewhere upstream chooses part of the DOM. In
+        an app holding student records the session being hijacked is a staff
+        session, so the blast radius is every record that account can read.
+      verify: >-
+        Trace the value to its origin. If any part of it was ever user-typed
+        or came from an API, it needs sanitising at render time, not at write
+        time - stored content is re-rendered by code that has forgotten where
+        it came from.

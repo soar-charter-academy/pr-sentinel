@@ -1,0 +1,42 @@
+name: core
+version: 1.1.0
+description: >-
+  Repository hygiene that is true of every repo regardless of stack. As of
+  1.1.0 this pack implements none of it itself: `gitleaks` does the secret
+  scanning, with a corpus and entropy tuning no hand-written rule set
+  competes with. The pack is now an adapter enablement plus a briefing, which
+  is a smaller thing than it was and an honest one. Always on; there is no
+  project this pack does not apply to.
+
+# No `applies_to`: core is the always-on pack. A secret can be committed into
+# any file, so the adapter it enables has no glob gate either.
+applies_to: []
+
+requires_engine: ">=0.1.0"
+
+tags: [hygiene, secrets, always-on]
+
+# Security only. A leaked credential is an event, not an architectural trap a
+# repo keeps falling into, so the `lore` pass gains nothing from this
+# briefing - and privacy, data-model and parity gain less than nothing,
+# since they would pay for it on every review.
+#
+# The briefing is the reason this pack still exists rather than being folded
+# away: it teaches Tier 2 what credential handling failure looks like in this
+# codebase, and no adapter does that. A pack is supposed to be both halves
+# (DESIGN s5), and after 1.1.0 the deterministic half is borrowed while the
+# knowledge half is still ours.
+briefing_passes: [security]
+
+# gitleaks is REQUIRED. This repository is private on the free tier, so
+# GitHub secret scanning and push protection are not available to it: without
+# gitleaks, nothing in a review reads the diff for credentials at all. That is
+# the exact case the `required` flag exists for — its absence is not reduced
+# breadth, it is a guarantee silently withdrawn.
+adapters:
+  - gitleaks
+
+# No script checks. `core.forbidden-files`, `core.conflict-markers`,
+# `core.huge-diff` and `core.binary-blobs` were deleted in 1.1.0 along with
+# `core/rules/secrets.yml` (DESIGN-V2 s3).
+checks: []

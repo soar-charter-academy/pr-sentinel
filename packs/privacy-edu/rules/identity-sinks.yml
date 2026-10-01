@@ -1,0 +1,86 @@
+# ONE rule. The other four privacy surfaces in this pack are script checks,
+# and deliberately so: "does this widen read access to a PII column", "does
+# test data reach real users" and "is PII in a URL" all require comparing the
+# PR against the rest of the repository, which semgrep does not do.
+#
+# This one is different. Linking a real person to a third-party observability
+# or analytics service is a *call shape* - a specific SDK, a specific method,
+# an argument that is not null. Matching the shape means the rule fires on
+# the act of identification itself rather than on any line that happens to
+# mention a student, which is the difference between a notice worth reading
+# and noise.
+rules:
+  - id: privacy-edu.telemetry.identity-linked-to-third-party
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      This call links an identified person to a third-party service. From
+      this point on that vendor holds a durable identifier for the user, and
+      every event, error report or session recording it captures is
+      attributable to that individual rather than anonymous. In a K-8
+      product the individual is usually a child, and session-replay tools in
+      particular capture whatever is on screen - which in this product is
+      other children's records.
+
+      NOT LEGAL ADVICE and NOT a compliance verdict. This is a surface
+      report: something that was anonymous to this vendor is now identified.
+      Whether that is permitted here depends on your vendor agreement, your
+      parental-consent posture and your state's student-privacy statute.
+      Have counsel confirm anything consequential.
+    patterns:
+      - pattern-either:
+          - pattern: Sentry.setUser(...)
+          - pattern: datadogRum.setUser(...)
+          - pattern: LogRocket.identify(...)
+          - pattern: FullStory.identify(...)
+          - pattern: FS.identify(...)
+          - pattern: posthog.identify(...)
+          - pattern: mixpanel.identify(...)
+          - pattern: amplitude.setUserId(...)
+          - pattern: analytics.identify(...)
+          - pattern: clarity("identify", ...)
+          - pattern: hj("identify", ...)
+          - pattern: Intercom("boot", ...)
+          - pattern: 'gtag("set", {user_id: $UID})'
+          - pattern: 'gtag("set", "user_id", $UID)'
+      # Clearing identity on sign-out is the opposite of the concern.
+      - pattern-not: Sentry.setUser(null)
+      - pattern-not: datadogRum.setUser({})
+      - pattern-not: posthog.identify(null)
+      - pattern-not: amplitude.setUserId(null)
+    paths:
+      exclude:
+        - "**/*.test.*"
+        - "**/*.spec.*"
+        - "**/tests/**"
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+    metadata:
+      pack: privacy-edu
+      sentinel-severity: high
+      nonbinding: true
+      frameworks:
+        - FERPA
+        - COPPA
+        - state student-privacy statutes
+      title: Identified user linked to a third-party telemetry service
+      rationale: >-
+        Identification is the step that turns aggregate telemetry into a
+        record about a named child, and it is almost always added in a
+        one-line diff whose stated purpose is debugging. The pack's value
+        here is that it notices (DESIGN s11): a reviewer who has never
+        thought about COPPA still gets told that this PR started sending a
+        minor's identity to a vendor. The rule matches specific SDK methods
+        rather than any mention of a student field, so it reports the act
+        rather than guessing at intent - and it stays silent on the sign-out
+        path, which calls the same methods with null.
+      verify: >-
+        Answer three things and record the answers in the PR. Which service
+        is this, and is it covered by a signed data-processing or
+        student-data-privacy agreement? What identifier is being passed - an
+        opaque internal UUID is a materially different exposure from an email
+        address or a student ID number. And does the tool capture screen
+        content (session replay, error screenshots), because then the
+        exposure is not only this user's identity but whatever records were
+        visible to them. For anything consequential, counsel decides, not
+        this tool.

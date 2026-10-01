@@ -1,0 +1,33 @@
+# Dependabot for the engine repo.
+#
+# Two ecosystems, and the second is the one everyone forgets (DESIGN s12).
+#
+# `pip` answers the question Dependabot is good at: does the tree contain a
+# package with a published CVE? Necessary, nowhere near sufficient - which is
+# why this repo also ships a `supply-chain` pack for the pre-CVE window.
+#
+# `github-actions` is the forgotten one. Every action in .github/workflows is
+# pinned to a full commit SHA, and a SHA pin without an updater is a version
+# frozen forever. Pinning and updating are complementary, not alternatives:
+# the pin stops a compromised upstream tag from executing in CI with every
+# secret the job can see, and Dependabot is what moves the pin when a real
+# release lands. It rewrites both the SHA and the trailing `# vX.Y.Z` comment.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies]
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: github-actions # the forgotten one
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies, ci]
+    commit-message:
+      prefix: "ci"

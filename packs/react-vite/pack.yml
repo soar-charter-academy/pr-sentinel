@@ -1,0 +1,33 @@
+name: react-vite
+version: 1.0.0
+description: >-
+  Client-bundle hazards for a React app built by Vite: values that the bundler
+  inlines into shipped JavaScript, browser storage used for things it cannot
+  safely hold, unescaped HTML injection, and the `\uXXXX`-in-JSX-text
+  rendering trap.
+
+applies_to:
+  - "*.tsx"
+  - "*.jsx"
+  - "*.ts"
+  - "*.js"
+  - "vite.config.*"
+  - ".env"
+  - ".env.*"
+  - "index.html"
+
+requires_engine: ">=0.1.0"
+
+tags: [react, vite, frontend, bundle, xss]
+
+# Security (what ships to the browser), privacy (what browser storage
+# retains, and for how long, on a shared device), parity (a prop or route
+# changed on one side of an interface only), and lore. Not data-model.
+briefing_passes: [security, privacy, parity, lore]
+
+checks:
+  - id: react-vite.client-env-secrets
+    severity: critical
+
+  - id: react-vite.browser-storage
+    severity: medium

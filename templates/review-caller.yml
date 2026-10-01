@@ -1,0 +1,43 @@
+# -----------------------------------------------------------------------------
+# GOES IN:  <your-repo>/.github/workflows/pr-sentinel.yml
+# -----------------------------------------------------------------------------
+# The entire integration. Everything else - permissions, checkout depth, action
+# pinning, exit-code handling - is decided inside the reusable workflow so that
+# it is decided once, correctly, rather than in every repo that adopts this.
+# -----------------------------------------------------------------------------
+name: PR review
+
+on:
+  # `pull_request`, NEVER `pull_request_target`. The latter runs with the base
+  # repo's secrets in the context of code the PR author wrote, which is the
+  # standard way review bots get turned into exfiltration tools. The reusable
+  # workflow refuses to run under it, so this is belt and braces.
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  review:
+    # PIN TO A TAG, NEVER `@main`.
+    #
+    # A rule added upstream must not silently change verdicts across every
+    # consuming repo overnight. `@v1` means you adopt new rules when you bump
+    # the tag and read the release notes - not at 03:00 because someone merged
+    # a PR in another repository. The engine resolves its own packs from the
+    # commit this tag points at, so the pin covers the rule set too.
+    #
+    # Dependabot's `github-actions` ecosystem updates this line for you.
+    uses: soar-charter-academy/pr-sentinel/.github/workflows/review.yml@v1
+
+    # ANTHROPIC_API_KEY is the only secret the reviewer can use, and it is
+    # optional: without it the deterministic tiers still run and the agent tier
+    # is skipped with a note. If you would rather not pass secrets at all, drop
+    # this block and set `run-agent: false`.
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+    # All optional. Start with `mode: advisory` for the first couple of weeks,
+    # read what it says, then delete the line and let .pr-sentinel.yml decide.
+    # with:
+    #   mode: advisory
+    #   run-agent: true
+    #   python-version: "3.12"
